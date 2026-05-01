@@ -1,0 +1,49 @@
+// claudeSummarize.js
+const Anthropic = require("@anthropic-ai/sdk");
+
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+/**
+ * ファイル内容をClaudeで要約する
+ * @param {string} keyword - 検索キーワード
+ * @param {object} file   - { name, content, mimeType }
+ * @returns {string} 要約テキスト（2〜3文）
+ */
+async function summarizeWithClaude({ keyword, file }) {
+  // テキストが取れていない場合はスキップ
+  if (!file.content || file.content.startsWith("[")) {
+    return `_${file.content ?? "内容を取得できませんでした"}_`;
+  }
+
+  const prompt = `
+あなたはドキュメント検索アシスタントです。
+ユーザーが「${keyword}」というキーワードで検索し、以下のドキュメントがヒットしました。
+
+【ファイル名】
+${file.name}
+
+【ドキュメント内容（抜粋）】
+${file.content}
+
+---
+上記の内容について、「${keyword}」との関連性を踏まえて2〜3文で簡潔に要約してください。
+- 箇条書き不要、文章で
+- 日本語で
+- 何のドキュメントか・どんな情報が含まれているかがわかるように
+`.trim();
+
+  try {
+    const message = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 300,
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    return message.content[0]?.text?.trim() ?? "要約を生成できませんでした。";
+  } catch (err) {
+    console.error("Claude API エラー:", err.message);
+    return "要約の生成に失敗しました。";
+  }
+}
+
+module.exports = { summarizeWithClaude };
