@@ -1,0 +1,11 @@
+{
+  "name": "slack-drive-search",
+  "version": "1.0.0",
+  "main": "app.js",
+  "scripts": { "start": "node app.js" },
+  "dependencies": {
+    "@slack/bolt": "^3.19.0",
+    "@anthropic-ai/sdk": "^0.39.0",
+    "googleapis": "^144.0.0"
+  }
+}
