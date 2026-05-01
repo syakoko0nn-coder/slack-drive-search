@@ -1,0 +1,108 @@
+// driveSearch.js
+const { google } = require("googleapis");
+
+// ─── 認証クライアント生成 ─────────────────────────────────────────────────────
+function getAuthClient() {
+  // サービスアカウントJSON（環境変数から）
+  const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+
+  const auth = new google.auth.GoogleAuth({
+    credentials,
+    scopes: [
+      "https://www.googleapis.com/auth/drive.readonly",
+    ],
+  });
+
+  return auth;
+}
+
+// ─── MIME typeマッピング ──────────────────────────────────────────────────────
+const MIME_MAP = {
+  document:    "application/vnd.google-apps.document",
+  spreadsheet: "application/vnd.google-apps.spreadsheet",
+  pdf:         "application/pdf",
+};
+
+// ─── Drive 検索 ───────────────────────────────────────────────────────────────
+async function searchDrive({ keyword, filetype = "all", maxResults = 3 }) {
+  const auth = getAuthClient();
+  const drive = google.drive({ version: "v3", auth });
+
+  // クエリ組み立て
+  let q = `fullText contains '${keyword.replace(/'/g, "\\'")}' and trashed = false`;
+  if (filetype !== "all" && MIME_MAP[filetype]) {
+    q += ` and mimeType = '${MIME_MAP[filetype]}'`;
+  }
+
+  const res = await drive.files.list({
+    q,
+    pageSize: maxResults,
+    fields: "files(id, name, mimeType, webViewLink, modifiedTime, owners)",
+    orderBy: "modifiedTime desc",
+    // Shared Drive を横断する場合は下記を追加
+    // includeItemsFromAllDrives: true,
+    // supportsAllDrives: true,
+    // corpora: "allDrives",
+  });
+
+  const files = res.data.files ?? [];
+
+  // 各ファイルのテキストを抽出してから返す
+  const filesWithContent = await Promise.all(
+    files.map(async (file) => {
+      const content = await extractTextContent(drive, file);
+      return { ...file, content };
+    })
+  );
+
+  return filesWithContent;
+}
+
+// ─── テキスト抽出 ─────────────────────────────────────────────────────────────
+async function extractTextContent(drive, file) {
+  try {
+    if (file.mimeType === "application/vnd.google-apps.document") {
+      // Google Docs → Export APIでプレーンテキスト取得（無償）
+      const res = await drive.files.export(
+        { fileId: file.id, mimeType: "text/plain" },
+        { responseType: "text" }
+      );
+      return truncateText(res.data, 3000); // Claude APIに渡す文字数を制限
+
+    } else if (file.mimeType === "application/vnd.google-apps.spreadsheet") {
+      // Google Sheets → CSV形式でエクスポート
+      const res = await drive.files.export(
+        { fileId: file.id, mimeType: "text/csv" },
+        { responseType: "text" }
+      );
+      return truncateText(res.data, 3000);
+
+    } else if (file.mimeType === "application/pdf") {
+      // PDF → Drive APIのテキスト抽出（OCRなしのテキストPDFのみ対応）
+      // ※ スキャンPDFはVision APIが別途必要
+      const res = await drive.files.get(
+        { fileId: file.id, alt: "media" },
+        { responseType: "arraybuffer" }
+      );
+      // PDFのバイナリからテキスト抽出は別ライブラリ（pdf-parse等）が必要
+      // ここでは簡易的にスキップしてファイル名のみで要約する
+      return "[PDFのテキスト抽出はファイル名・タイトルのみ対応]";
+
+    } else {
+      return "[このファイルタイプはテキスト抽出非対応]";
+    }
+  } catch (err) {
+    console.warn(`テキスト抽出失敗 (${file.name}):`, err.message);
+    return "[テキスト取得に失敗しました]";
+  }
+}
+
+// ─── テキストを指定文字数で切り捨て ──────────────────────────────────────────
+function truncateText(text, maxChars) {
+  if (!text) return "";
+  return text.length > maxChars
+    ? text.slice(0, maxChars) + "\n...[以下省略]"
+    : text;
+}
+
+module.exports = { searchDrive };
